@@ -1,0 +1,98 @@
+resources:
+  jobs:
+    orchestration_demo_job:
+      name: orchestration-demo-job
+      max_concurrent_runs: 1
+      tags:
+        purpose: dab-orchestration-learning
+
+      parameters:
+        - name: catalog
+          default: sp_catalog
+        - name: schema
+          default: dab_orchestration_demo
+        - name: run_mode
+          default: full
+        - name: region_list
+          default: '["us", "eu", "apac"]'
+
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: UTC
+        pause_status: PAUSED # demo only — never fires unless you flip this
+
+      email_notifications:
+        on_failure:
+          - surya.patnaik1@gmail.com
+
+      tasks:
+        - task_key: setup_schema
+          notebook_task:
+            notebook_path: ../src/orchestration/setup_schema.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+
+        - task_key: check_run_mode
+          depends_on:
+            - task_key: setup_schema
+          condition_task:
+            op: EQUAL_TO
+            left: "{{job.parameters.run_mode}}"
+            right: "full"
+
+        - task_key: create_core_table
+          depends_on:
+            - task_key: setup_schema
+          timeout_seconds: 600
+          max_retries: 2
+          min_retry_interval_millis: 30000
+          retry_on_timeout: true
+          notebook_task:
+            notebook_path: ../src/orchestration/create_core_table.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+
+        - task_key: create_optional_table
+          depends_on:
+            - task_key: check_run_mode
+              outcome: "true"
+            - task_key: create_core_table
+          notebook_task:
+            notebook_path: ../src/orchestration/create_optional_table.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+
+        - task_key: create_regional_tables
+          depends_on:
+            - task_key: create_core_table
+          for_each_task:
+            inputs: "{{job.parameters.region_list}}"
+            concurrency: 3
+            task:
+              task_key: create_regional_table_inner
+              notebook_task:
+                notebook_path: ../src/orchestration/create_regional_table.py
+                base_parameters:
+                  catalog: "{{job.parameters.catalog}}"
+                  schema: "{{job.parameters.schema}}"
+                  region: "{{input}}"
+
+        - task_key: run_hello_dab_job
+          depends_on:
+            - task_key: create_regional_tables
+          run_job_task:
+            job_id: ${resources.jobs.hello_dab_job.id}
+
+        - task_key: notify_and_cleanup
+          depends_on:
+            - task_key: create_optional_table
+            - task_key: run_hello_dab_job
+          run_if: ALL_DONE
+          notebook_task:
+            notebook_path: ../src/orchestration/notify_summary.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
