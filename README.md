@@ -1,8 +1,20 @@
 # databrick_demo
 
+Two things live here: ad-hoc notebooks exploring Unity Catalog/Delta/Iceberg (`Day 1 - Create catalog.ipynb`, `Day 2 - Create delta tables.ipynb`, `Day 2 - Execute notebook.ipynb`), and a [Databricks Asset Bundle](https://docs.databricks.com/en/dev-tools/bundles/index.html) built up incrementally to learn DAB deploy mechanics and Databricks Workflows/Lakeflow orchestration. The bundle is deployed via GitHub Actions on every push to `main`; nothing runs automatically — every job/pipeline below is triggered by hand so you can see what each one does.
+
+### Resources at a glance
+
+| Resource | Type | What it shows |
+|---|---|---|
+| `hello_dab_job` | Job | Minimal single-task job — the basic deploy workflow |
+| `orchestration_demo_job` | Job | Multi-task DAG: `condition_task` branching, job parameters, `for_each_task`, cross-task values, retries, `run_if`, `run_job_task` |
+| `lakeflow_sql_demo` | Pipeline (SQL) | Declarative bronze → silver → gold with a `CONSTRAINT ... EXPECT` data-quality rule |
+| `lakeflow_python_demo` | Pipeline (Python) | Same shape via `@dlt.table` / `@dlt.expect_or_drop` |
+| `seed_cdc_events_job` + `lakeflow_cdc_demo` | Job + Pipeline | Autoloader (`STREAM read_files`) feeding two `AUTO CDC INTO` flows — SCD Type 1 vs Type 2 |
+
 ## Deploying with Databricks Asset Bundles
 
-This repo includes a minimal [Databricks Asset Bundle](https://docs.databricks.com/en/dev-tools/bundles/index.html) (`databricks.yml`, `resources/hello_dab_job.yml`, `src/hello_dab.py`) defining one job, `hello_dab_job`, that creates a small DataFrame and writes it to `sp_catalog.dab_demo.hello_dab`. It exists to demonstrate the DAB deploy workflow, separate from the exploratory notebooks in this repo.
+`databricks.yml`, `resources/hello_dab_job.yml`, `src/hello_dab.py` define the first and simplest job, `hello_dab_job`, which creates a small DataFrame and writes it to `sp_catalog.dab_demo.hello_dab`.
 
 ### Local setup
 
@@ -42,13 +54,32 @@ Two [Lakeflow Declarative Pipelines](https://docs.databricks.com/en/delta-live-t
 - **`lakeflow_sql_demo`** (`resources/lakeflow_sql_demo.yml`, `src/lakeflow/sql_demo/orders_pipeline.sql`) — SQL-authored: `bronze_orders` → `silver_orders` → `gold_sales_by_product`. `silver_orders` declares `CONSTRAINT valid_quantity EXPECT (quantity > 0) ON VIOLATION DROP ROW`, a declarative data-quality rule — one seeded row has a negative quantity specifically to show it get dropped rather than failing the pipeline. Writes to `sp_catalog.dab_lakeflow_sql_demo`.
 - **`lakeflow_python_demo`** (`resources/lakeflow_python_demo.yml`, `src/lakeflow/python_demo/events_pipeline.py`) — Python-authored with the `dlt` decorator API: `bronze_events` → `silver_events` → `gold_daily_event_counts`. `silver_events` uses `@dlt.expect_or_drop`, the Python equivalent of the SQL constraint above. Writes to `sp_catalog.dab_lakeflow_python_demo`.
 
-Both use `MATERIALIZED VIEW`/`@dlt.table` over inline literal data (batch, not streaming tables) since there's no incremental source here — swapping in a streaming table fed by Auto Loader would be the natural next step. Both run on serverless compute and are triggered, not continuous — deployed by CI like the jobs above, but not auto-run:
+Both use `MATERIALIZED VIEW`/`@dlt.table` over inline literal data (batch, not streaming tables) since there's no incremental source here — the Autoloader-fed streaming table below is the incremental counterpart to these. Both run on serverless compute and are triggered, not continuous — deployed by CI like the jobs above, but not auto-run:
 
 ```bash
 databricks bundle deploy -t dev
 databricks bundle run lakeflow_sql_demo -t dev
 databricks bundle run lakeflow_python_demo -t dev
 ```
+
+### Autoloader + SCD (AUTO CDC) sample
+
+Two more resources, together demonstrating incremental file ingestion and slowly changing dimensions — features that need actual multi-batch data to be worth seeing, unlike the samples above:
+
+- **`seed_cdc_events_job`** (`resources/seed_cdc_events_job.yml`, `src/lakeflow/cdc_demo/seed_customer_events.py`) — a job, parameterized by `batch`, that creates a Unity Catalog Volume (`sp_catalog.dab_lakeflow_cdc_demo.raw_events`) and writes one JSON file of hardcoded "customer change event" records into it per batch: `batch=1` is an initial load (3 inserts), `batch=2` is a set of changes (an update, a delete, a new insert).
+- **`lakeflow_cdc_demo`** (`resources/lakeflow_cdc_demo.yml`, `src/lakeflow/cdc_demo/customers_cdc_pipeline.sql`) — a pipeline where `bronze_customer_changes` is a **streaming table** built from `STREAM read_files(...)` (this is Autoloader: it incrementally picks up whatever files exist in the volume), feeding two `AUTO CDC INTO` flows off the same stream — `customers_scd1` (`STORED AS SCD TYPE 1`, upserts/deletes in place) and `customers_scd2` (`STORED AS SCD TYPE 2`, keeps every version via `__START_AT`/`__END_AT`).
+
+This one only makes sense run twice — seed a batch, run the pipeline, seed the next batch, run the pipeline again:
+
+```bash
+databricks bundle deploy -t dev
+databricks bundle run seed_cdc_events_job -t dev --params batch=1
+databricks bundle run lakeflow_cdc_demo -t dev
+databricks bundle run seed_cdc_events_job -t dev --params batch=2
+databricks bundle run lakeflow_cdc_demo -t dev
+```
+
+After both runs, compare `sp_catalog.dab_lakeflow_cdc_demo.customers_scd1` (3 current rows, Bob gone entirely) against `customers_scd2` (5 rows — Alice's and Bob's old rows still present with `__END_AT` set) to see the difference between the two SCD types.
 
 ### GitHub Actions
 

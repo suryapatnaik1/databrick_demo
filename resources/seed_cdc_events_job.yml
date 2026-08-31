@@ -1,0 +1,21 @@
+resources:
+  jobs:
+    seed_cdc_events_job:
+      name: seed-cdc-events-job
+
+      parameters:
+        - name: catalog
+          default: sp_catalog
+        - name: schema
+          default: dab_lakeflow_cdc_demo
+        - name: batch
+          default: "1"
+
+      tasks:
+        - task_key: write_batch
+          notebook_task:
+            notebook_path: ../src/lakeflow/cdc_demo/seed_customer_events.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              batch: "{{job.parameters.batch}}"

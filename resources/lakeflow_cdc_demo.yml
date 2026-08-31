@@ -1,0 +1,11 @@
+resources:
+  pipelines:
+    lakeflow_cdc_demo:
+      name: lakeflow-cdc-demo
+      catalog: sp_catalog
+      schema: dab_lakeflow_cdc_demo
+      serverless: true
+      continuous: false
+      libraries:
+        - file:
+            path: ../src/lakeflow/cdc_demo/customers_cdc_pipeline.sql
