@@ -1,0 +1,8 @@
+resources:
+  jobs:
+    hello_dab_job:
+      name: hello-dab-job
+      tasks:
+        - task_key: create_dataframe
+          notebook_task:
+            notebook_path: ../src/hello_dab.py
