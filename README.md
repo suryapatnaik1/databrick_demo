@@ -35,9 +35,24 @@ databricks bundle run orchestration_demo_job -t dev
 databricks bundle run orchestration_demo_job -t dev --params run_mode=quick   # skips create_optional_table
 ```
 
+### Lakeflow pipeline samples
+
+Two [Lakeflow Declarative Pipelines](https://docs.databricks.com/en/delta-live-tables/index.html) (formerly Delta Live Tables) show the other Databricks resource type: instead of task-by-task orchestration, you declare tables and Databricks resolves the dependency graph and refresh order itself.
+
+- **`lakeflow_sql_demo`** (`resources/lakeflow_sql_demo.yml`, `src/lakeflow/sql_demo/orders_pipeline.sql`) — SQL-authored: `bronze_orders` → `silver_orders` → `gold_sales_by_product`. `silver_orders` declares `CONSTRAINT valid_quantity EXPECT (quantity > 0) ON VIOLATION DROP ROW`, a declarative data-quality rule — one seeded row has a negative quantity specifically to show it get dropped rather than failing the pipeline. Writes to `sp_catalog.dab_lakeflow_sql_demo`.
+- **`lakeflow_python_demo`** (`resources/lakeflow_python_demo.yml`, `src/lakeflow/python_demo/events_pipeline.py`) — Python-authored with the `dlt` decorator API: `bronze_events` → `silver_events` → `gold_daily_event_counts`. `silver_events` uses `@dlt.expect_or_drop`, the Python equivalent of the SQL constraint above. Writes to `sp_catalog.dab_lakeflow_python_demo`.
+
+Both use `MATERIALIZED VIEW`/`@dlt.table` over inline literal data (batch, not streaming tables) since there's no incremental source here — swapping in a streaming table fed by Auto Loader would be the natural next step. Both run on serverless compute and are triggered, not continuous — deployed by CI like the jobs above, but not auto-run:
+
+```bash
+databricks bundle deploy -t dev
+databricks bundle run lakeflow_sql_demo -t dev
+databricks bundle run lakeflow_python_demo -t dev
+```
+
 ### GitHub Actions
 
-`.github/workflows/deploy.yml` runs `databricks bundle validate` on pull requests, and `deploy` + `run` on every push to `main`. Before it will work, add these repo secrets under **Settings → Secrets and variables → Actions**:
+`.github/workflows/deploy.yml` runs `databricks bundle validate` on pull requests, and `databricks bundle deploy -t dev` on every push to `main` — it deploys every job and pipeline in the bundle but doesn't run any of them; trigger runs yourself (see the `databricks bundle run ...` commands above). Before deploy will work, add these repo secrets under **Settings → Secrets and variables → Actions**:
 
 - `DATABRICKS_HOST` — your workspace URL
 - `DATABRICKS_TOKEN` — a PAT from that workspace (User Settings → Developer → Access tokens)

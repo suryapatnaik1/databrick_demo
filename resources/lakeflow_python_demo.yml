@@ -1,0 +1,11 @@
+resources:
+  pipelines:
+    lakeflow_python_demo:
+      name: lakeflow-python-demo
+      catalog: sp_catalog
+      schema: dab_lakeflow_python_demo
+      serverless: true
+      continuous: false
+      libraries:
+        - file:
+            path: ../src/lakeflow/python_demo/events_pipeline.py
